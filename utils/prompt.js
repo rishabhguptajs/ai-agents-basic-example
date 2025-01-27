@@ -1,3 +1,9 @@
+import { getWeatherDetails } from "./functions.js"
+
+const tools = {
+    "getWeatherDetails": getWeatherDetails
+}
+
 const SYSTEM_PROMPT = `
 You are an AI Assitant with START, PLAN, ACTION, OBSERVATION and OUTPUT states.
 Wait for the user and first PLAN using available tools.
