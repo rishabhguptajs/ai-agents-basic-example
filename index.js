@@ -24,83 +24,88 @@ async function main() {
         }
     ];
 
-    let aiResponse = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
-        model: "meta-llama/llama-3.2-1b-instruct:free",
-        messages: messages,
-    }, {
-        headers: {
-            "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-            "Content-Type": "application/json"
-        }
-    });
-
-    const responseContent = aiResponse.data.choices[0].message.content;
-    console.log("AI Response: ", responseContent);
-
-    let aiPlan;
     try {
-        const actionMatch = responseContent.match(/ACTION\s*\n({[^}]+})/);
-        if (actionMatch && actionMatch[1]) {
-            aiPlan = JSON.parse(actionMatch[1]);
-        } else {
-            console.log("No ACTION found in response");
-            return;
+        // Initial API call
+        let aiResponse = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
+            model: "meta-llama/llama-3.2-1b-instruct:free",
+            messages: messages,
+            temperature: 0.7, // Add temperature for more focused responses
+            max_tokens: 1000  // Ensure enough tokens for complete response
+        }, {
+            headers: {
+                "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://localhost:3000", // Add referer header
+                "X-Title": "Weather App"  // Add title header
+            }
+        });
+
+        let responseContent = aiResponse.data.choices[0].message.content;
+        console.log("Initial AI Response: ", responseContent);
+
+        // Parse initial action
+        let aiPlan;
+        const actionMatch = responseContent.match(/ACTION\s*\n({[\s\S]+?})/);
+        if (!actionMatch) {
+            throw new Error("No valid ACTION found in initial response");
+        }
+        aiPlan = JSON.parse(actionMatch[1]);
+        console.log("Initial AI Plan: ", aiPlan);
+
+        // Main interaction loop
+        while (true) {
+            if (aiPlan.type === "action" && aiPlan.function === "getWeatherDetails") {
+                // Get weather observation
+                const observation = await getWeatherDetails(aiPlan.input);
+                
+                // Add interaction to message history
+                messages.push(
+                    { role: "assistant", content: responseContent },
+                    { role: "system", content: `Observation: ${JSON.stringify(observation)}` }
+                );
+
+                // Make next API call
+                aiResponse = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
+                    model: "meta-llama/llama-3.2-1b-instruct:free",
+                    messages: messages,
+                    temperature: 0.7,
+                    max_tokens: 1000
+                }, {
+                    headers: {
+                        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": "https://localhost:3000",
+                        "X-Title": "Weather App"
+                    }
+                });
+
+                responseContent = aiResponse.data.choices[0].message.content;
+                console.log("Follow-up AI Response: ", responseContent);
+
+                // Parse next action/output
+                const nextActionMatch = responseContent.match(/ACTION\s*\n({[\s\S]+?})/);
+                const outputMatch = responseContent.match(/OUTPUT\s*\n({[\s\S]+?})/);
+                
+                if (nextActionMatch) {
+                    aiPlan = JSON.parse(nextActionMatch[1]);
+                } else if (outputMatch) {
+                    aiPlan = JSON.parse(outputMatch[1]);
+                } else {
+                    throw new Error("No valid ACTION or OUTPUT found in response");
+                }
+                console.log("Next AI Plan: ", aiPlan);
+
+            } else if (aiPlan.type === "output") {
+                console.log("\nFinal Output:", aiPlan.output);
+                break;
+            } else {
+                throw new Error(`Unsupported AI Plan type: ${aiPlan.type}`);
+            }
         }
     } catch (error) {
-        console.error("Failed to parse AI response as JSON:", error);
-        return;
-    }
-    console.log("AI Plan: ", aiPlan);
-
-    while (true) {
-        if (aiPlan.type === "action" && aiPlan.function === "getWeatherDetails") {
-            const observation = getWeatherDetails(aiPlan.input);
-
-            messages.push(
-                { role: "assistant", content: JSON.stringify(aiPlan) },
-                { role: "system", content: `Observation: ${observation}` }
-            );
-
-            aiResponse = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
-                model: "meta-llama/llama-3.2-1b-instruct:free",
-                messages: messages
-            }, {
-                headers: {
-                    "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-                    "Content-Type": "application/json"
-                }
-            });
-
-            // Parse next action
-            const responseContent = aiResponse.data.choices[0].message.content;
-            console.log("AI Response: ", responseContent);
-
-            try {
-                const actionMatch = responseContent.match(/ACTION\s*\n({[^}]+})/);
-                if (actionMatch && actionMatch[1]) {
-                    aiPlan = JSON.parse(actionMatch[1]);
-                } else {
-                    // Try to find OUTPUT if no ACTION is found
-                    const outputMatch = responseContent.match(/OUTPUT\s*\n({[^}]+})/);
-                    if (outputMatch && outputMatch[1]) {
-                        aiPlan = JSON.parse(outputMatch[1]);
-                    } else {
-                        console.log("No ACTION or OUTPUT found in response");
-                        break;
-                    }
-                }
-            } catch (error) {
-                console.error("Failed to parse AI response:", error);
-                break;
-            }
-            console.log("AI Plan: ", aiPlan);
-
-        } else if (aiPlan.type === "output") {
-            console.log("\nFinal Output:", aiPlan.output);
-            break;
-        } else {
-            console.log("AI Plan not supported: ", aiPlan);
-            break;
+        console.error("Error occurred:", error.message);
+        if (error.response) {
+            console.error("API Response Error:", error.response.data);
         }
     }
 }
